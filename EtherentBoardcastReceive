@@ -1,0 +1,176 @@
+package com.android.settings;
+
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.net.EthernetManager;
+import android.net.IpConfiguration;
+import android.net.LinkAddress;
+import android.net.NetworkUtils;
+import android.net.StaticIpConfiguration;
+import android.os.Bundle;
+import android.os.SystemProperties;
+import android.provider.Settings;
+import android.util.Log;
+import android.widget.Toast;
+
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.util.regex.Pattern;
+
+/**
+ * @Description: java类作用描述
+ * @Author: xq.zhao
+ * @CreateDate: 2021-04-22 10:08
+ */
+public class EtherentBoardcastReceive extends BroadcastReceiver {
+
+    private static final String TAG = "EtherentReceive";
+    private final static String nullIpInfo = "0.0.0.0";
+    private final static String ACTION_SET_STATIC_IP = "android.net.action.ETHERNET_STATIC_IP_CHANGED";
+    private final static String ACTION_SET_DHCP_IP = "android.net.action.ETHERNET_DHCP_IP_CHANGED";
+    private final static String ACTION_GET_NET_CONFIG = "android.net.action.ETHERNET_GET_NET_CONFIG";
+    private IpConfiguration.IpAssignment mMode = IpConfiguration.IpAssignment.UNASSIGNED;
+    private  String mEthMode = null;//"static";
+    private  String mEthIpAddress = null;//"192.168.1.254";
+    private  String mEthNetmask = null;//"255.255.255.0";
+    private  String mEthGateway = null;//"192.168.1.1";
+    private  String mEthdns1 = null;//"192.168.1.1";
+    private  String mEthdns2 = null;//"null";
+    private  String mode = null;//"null";
+    EthernetManager mEthManager;
+
+    @Override
+    public void onReceive(Context context, Intent intent) {
+
+        IpConfiguration mIpConfiguration;
+        StaticIpConfiguration mStaticIpConfiguration;
+        String action = intent.getAction();
+        Log.i(TAG, "receive a new action : " + action);
+
+        mEthManager = (EthernetManager) context.getSystemService(Context.ETHERNET_SERVICE);
+        if (mEthManager == null) {
+            Log.i(TAG, "fail to getSystemService :  " + Context.ETHERNET_SERVICE);
+        }
+
+        if(action.equals(ACTION_SET_STATIC_IP)){
+            mStaticIpConfiguration = new StaticIpConfiguration();
+            getNetConfigFromIntent(intent);
+
+            if (mEthMode == null || mEthMode.equals("STATIC")) {
+                Inet4Address inetAddr = getIPv4Address(mEthIpAddress);
+                int prefixLength = maskStr2InetMask(mEthNetmask);
+                InetAddress gatewayAddr = getIPv4Address(mEthGateway);
+                InetAddress dnsAddr1 = getIPv4Address(mEthdns1);
+                InetAddress dnsAddr2 = getIPv4Address(mEthdns2);
+                if (inetAddr == null || gatewayAddr == null || prefixLength <= 0) {
+                    Log.e(TAG, "ip,mask or dnsAddr is wrong");
+                    return;
+                }
+                if (inetAddr.getAddress().toString().isEmpty() || prefixLength == 0 || gatewayAddr.toString().isEmpty()
+                ) {
+                    Log.e(TAG, "ip,mask or dnsAddr is wrong");
+                    return;
+                }
+
+                mStaticIpConfiguration.ipAddress = new LinkAddress(inetAddr, prefixLength);
+                mStaticIpConfiguration.gateway = gatewayAddr;
+                if (dnsAddr1 != null && !dnsAddr1.toString().isEmpty())
+                    mStaticIpConfiguration.dnsServers.add(dnsAddr1);
+                if (dnsAddr2 != null && !dnsAddr2.toString().isEmpty())
+                    mStaticIpConfiguration.dnsServers.add(dnsAddr2);
+
+                    mIpConfiguration = new IpConfiguration(IpConfiguration.IpAssignment.STATIC, IpConfiguration.ProxySettings.NONE, mStaticIpConfiguration, null);
+                    mEthManager.setConfiguration("eth0",mIpConfiguration);
+                    Log.d(TAG, "set STATIC IP");
+            }
+        } else if(action.equals(ACTION_SET_DHCP_IP)) {
+            mEthManager.setConfiguration("eth0",new IpConfiguration(IpConfiguration.IpAssignment.DHCP, IpConfiguration.ProxySettings.NONE, null, null));
+                Log.d(TAG, "set DHCP IP");
+        } else if(action.equals(ACTION_GET_NET_CONFIG)){
+            getNetConfigFromEth();
+            Settings.Global.putString(context.getContentResolver(),"net.mode",mode);
+            Settings.Global.putString(context.getContentResolver(),"net.ip",mEthIpAddress);
+            Settings.Global.putString(context.getContentResolver(),"net.mask",mEthNetmask);
+            Settings.Global.putString(context.getContentResolver(),"net.gateway",mEthGateway);
+            Settings.Global.putString(context.getContentResolver(),"net.dns1",mEthdns1);
+            Settings.Global.putString(context.getContentResolver(),"net.dns2",mEthdns2);
+        }
+    }
+
+    private void getNetConfigFromIntent(Intent intent) {
+        Bundle bundle = intent.getExtras();
+        if (bundle.getString("netMode") != null)
+            mEthMode = bundle.getString("netMode");
+        if (bundle.getString("ipaddr") != null)
+            mEthIpAddress = bundle.getString("ipaddr");
+        if (bundle.getString("netMask") != null)
+            mEthNetmask = bundle.getString("netMask");
+        if (bundle.getString("gateway") != null)
+            mEthGateway = bundle.getString("gateway");
+        if (bundle.getString("dns1") != null)
+            mEthdns1 = bundle.getString("dns1");
+        if (bundle.getString("dns2") != null)
+            mEthdns2 = bundle.getString("dns2");
+    }
+
+    private void getNetConfigFromEth(){
+        mMode = mEthManager.getConfiguration("eth0").getIpAssignment();
+        if(mMode == IpConfiguration.IpAssignment.STATIC){
+            mode = "STATIC";
+        } else {
+            mode = "DHCP";
+        }
+        Log.d(TAG, "mMode : " + mMode + "mode : " + mode);
+        mEthIpAddress = mEthManager.getIpAddress("eth0");
+        mEthNetmask = mEthManager.getNetmask("eth0");
+        mEthGateway = mEthManager.getGateway("eth0");
+        mEthdns1 = mEthManager.getDns("eth0").split(",")[0];
+        if(mEthManager.getDns("eth0").split(",").length > 1){
+            mEthdns2 = mEthManager.getDns("eth0").split(",")[1];
+        }else{
+            mEthdns2 = "";
+        }
+    }
+
+    private Inet4Address getIPv4Address(String text) {
+        try {
+            return (Inet4Address) NetworkUtils.numericToInetAddress(text);
+        } catch (IllegalArgumentException | ClassCastException e) {
+            return null;
+        }
+    }
+
+    /*
+     * convert subMask string to prefix length
+     */
+    private int maskStr2InetMask(String maskStr) {
+        StringBuffer sb;
+        String str;
+        int inetmask = 0;
+        int count = 0;
+        /*
+         * check the subMask format
+         */
+        Pattern pattern = Pattern.compile("(^((\\d|[01]?\\d\\d|2[0-4]\\d|25[0-5])\\.){3}(\\d|[01]?\\d\\d|2[0-4]\\d|25[0-5])$)|^(\\d|[1-2]\\d|3[0-2])$");
+        if (pattern.matcher(maskStr).matches() == false) {
+            Log.e(TAG, "subMask is error");
+            return 0;
+        }
+
+        String[] ipSegment = maskStr.split("\\.");
+        for (int n = 0; n < ipSegment.length; n++) {
+            sb = new StringBuffer(Integer.toBinaryString(Integer.parseInt(ipSegment[n])));
+            str = sb.reverse().toString();
+            count = 0;
+            for (int i = 0; i < str.length(); i++) {
+                i = str.indexOf("1", i);
+                if (i == -1)
+                    break;
+                count++;
+            }
+            inetmask += count;
+        }
+        return inetmask;
+    }
+}
