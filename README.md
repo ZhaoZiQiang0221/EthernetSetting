@@ -1,1 +1,1 @@
-# EthernetSetting
+Manually set Ethernet information
